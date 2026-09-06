@@ -115,7 +115,6 @@ class FileAggregatorApp:
         new_files = []
         for p in paths:
             p = os.path.abspath(p)
-            # Skip dotfiles/dotfolders at the root level
             basename = os.path.basename(p)
             if basename.startswith('.'):
                 continue
@@ -124,11 +123,8 @@ class FileAggregatorApp:
                 if p not in self.file_paths:
                     new_files.append(p)
             elif os.path.isdir(p):
-                # Walk recursively, but prune dot directories and skip dot files
                 for dirpath, dirnames, filenames in os.walk(p):
-                    # Remove dot directories from dirnames so os.walk won't descend into them
                     dirnames[:] = [d for d in dirnames if not d.startswith('.')]
-                    # Skip dot files
                     for f in filenames:
                         if f.startswith('.'):
                             continue
@@ -136,18 +132,19 @@ class FileAggregatorApp:
                         if full not in self.file_paths:
                             new_files.append(full)
             else:
-                messagebox.showwarning("Invalid path", f"Path not found: {p}")
+                messagebox.showerror("Invalid path", f"Path not found: {p}")
 
         if new_files:
             self.file_paths.extend(new_files)
             self.update_output()
             self.update_listbox()
-            messagebox.showinfo("Files added", f"Added {len(new_files)} file(s).")
+            # Optionally update status briefly (will be overwritten by update_output)
+            self.status_var.set(f"Added {len(new_files)} file(s)")
         else:
-            messagebox.showinfo("No new files", "All paths already added or no valid files found (dotfiles ignored).")
+            # No new files; still update status to reflect that
+            self.status_var.set("No new files added (dotfiles ignored or duplicates)")
 
     def add_files(self):
-        """Add files via file dialog."""
         new_paths = filedialog.askopenfilenames(
             title="Select text files",
             filetypes=[("All files", "*.*")]
@@ -156,13 +153,11 @@ class FileAggregatorApp:
             self.add_paths(new_paths)
 
     def add_folder(self):
-        """Add all files from a folder recursively."""
         folder = filedialog.askdirectory(title="Select a folder to add recursively")
         if folder:
             self.add_paths([folder])
 
     def add_path_from_entry(self):
-        """Add the path entered in the entry field."""
         path = self.path_entry.get().strip()
         if path:
             self.add_paths([path])
