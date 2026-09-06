@@ -1,198 +1,309 @@
 #!/usr/bin/env python3
+import tkinter as tk
+from tkinter import filedialog, scrolledtext, messagebox, ttk
 import os
 import sys
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+import re
 
-# Optional DND Support
+# Try to import tkinterdnd2 for drag-and-drop support (optional)
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
     DND_AVAILABLE = True
 except ImportError:
     DND_AVAILABLE = False
 
-# Try to import tiktoken for token counting (Optional)
+# Try to import tiktoken for token counting
 try:
     import tiktoken
-    TOKENIZER_AVAILABLE = True
+    TOKENIZER = tiktoken.get_encoding("cl100k_base")  # used by GPT-4, ChatGPT
+    TIKTOKEN_AVAILABLE = True
 except ImportError:
-    TOKENIZER_AVAILABLE = False
+    TOKENIZER = None
+    TIKTOKEN_AVAILABLE = False
 
-# File extensions to Markdown code block language identifiers
+# Map file extensions to Markdown code block language identifiers
 LANG_MAP = {
-    'py': 'python', 'js': 'js', 'jsx': 'jsx', 'ts': 'ts', 'tsx': 'tsx',
-    'java': 'java', 'c': 'c', 'cpp': 'cpp', 'h': 'h', 'cs': 'csharp',
-    'html': 'html', 'css': 'css', 'json': 'json', 'md': 'markdown',
-    'sh': 'bash', 'yml': 'yaml', 'yaml': 'yaml', 'txt': 'text',
-    'xml': 'xml', 'sql': 'sql', 'rb': 'ruby', 'go': 'go', 'rs': 'rust'
+    '.py': 'python', '.js': 'js', '.jsx': 'jsx', '.ts': 'ts', '.tsx': 'tsx',
+    '.java': 'java', '.c': 'c', '.cpp': 'cpp', '.h': 'h', '.cs': 'csharp',
+    '.go': 'go', '.rb': 'ruby', '.php': 'php', '.html': 'html', '.htm': 'html',
+    '.css': 'css', '.scss': 'scss', '.less': 'less', '.json': 'json',
+    '.xml': 'xml', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml',
+    '.md': 'markdown', '.sh': 'bash', '.bash': 'bash', '.ps1': 'powershell',
+    '.sql': 'sql', '.r': 'r', '.rs': 'rust', '.swift': 'swift', '.kt': 'kotlin',
+    '.dart': 'dart', '.lua': 'lua', '.pl': 'perl', '.pm': 'perl',
+    '.tcl': 'tcl', '.vim': 'vim', '.tex': 'latex', '.txt': 'text',
 }
 
-class MarkdownAggregatorApp:
+def get_language(ext):
+    return LANG_MAP.get(ext.lower(), ext.lstrip('.') or 'text')
+
+def read_file_content(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(path, 'r', encoding=sys.getfilesystemencoding()) as f:
+                return f.read()
+        except Exception as e:
+            return f"[Error reading file: {e}]"
+    except Exception as e:
+        return f"[Error reading file: {e}]"
+
+class FileAggregatorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Markdown File Aggregator")
-        self.root.geometry("900x750")
-        
-        # Define fonts for a polished look
-        mono_font = ("Menlo", 11)
-        
-        # Top Toolbar
-        top_frame = ttk.Frame(root, padding=10)
-        top_frame.pack(fill=tk.X)
-        
-        ttk.Button(top_frame, text="Add Files", command=self.add_files).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="Add Folder", command=self.add_folder).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="Remove Selected", command=self.remove_selected).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="Clear All", command=self.clear_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="Copy to Clipboard", command=self.copy_to_clipboard).pack(side=tk.LEFT, padx=2)
-        ttk.Button(top_frame, text="Save as .md", command=self.save_as_md).pack(side=tk.LEFT, padx=2)
+        self.root.geometry("950x750")
 
-        # DND Status Label
-        dnd_status = "DND Active (Drop files here)" if DND_AVAILABLE else "DND Disabled (Install tkinterdnd2)"
-        ttk.Label(top_frame, text=dnd_status, foreground="green" if DND_AVAILABLE else "grey").pack(side=tk.RIGHT)
+        self.file_paths = []  # list of absolute paths
 
-        # Add Path Frame
-        path_frame = ttk.Frame(root, padding=10)
-        path_frame.pack(fill=tk.X)
-        ttk.Label(path_frame, text="Add path (file or folder):").pack(anchor=tk.W)
-        
-        self.path_entry = ttk.Entry(path_frame)
-        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        ttk.Button(path_frame, text="Add", command=self.add_manual_path).pack(side=tk.RIGHT)
+        # --- Top button row ---
+        btn_frame = tk.Frame(root)
+        btn_frame.pack(pady=5, fill=tk.X)
 
-        # Files Added Frame
-        files_frame = ttk.Frame(root, padding=10)
-        files_frame.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(files_frame, text="Files added (select to remove):").pack(anchor=tk.W)
-        
-        self.file_listbox = tk.Listbox(files_frame, selectmode=tk.EXTENDED, font=mono_font)
-        scrollbar1 = ttk.Scrollbar(files_frame, orient=tk.VERTICAL, command=self.file_listbox.yview)
-        self.file_listbox.config(yscrollcommand=scrollbar1.set)
-        
-        scrollbar1.pack(side=tk.RIGHT, fill=tk.Y)
-        self.file_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tk.Button(btn_frame, text="+Files", command=self.add_files, width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="+Folder", command=self.add_folder, width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Remove", command=self.remove_selected, width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Clear", command=self.clear_all, width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Copy", command=self.copy_to_clipboard, width=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(btn_frame, text="Save", command=self.save_to_file, width=6    ).pack(side=tk.LEFT, padx=2)
 
-        # DND Binding for Listbox
+        # --- Entry for adding a custom path ---
+        path_entry_frame = tk.Frame(root)
+        path_entry_frame.pack(pady=5, fill=tk.X, padx=10)
+
+        tk.Label(path_entry_frame, text="Add path (file or folder):").pack(side=tk.LEFT)
+        self.path_entry = tk.Entry(path_entry_frame, width=50)
+        self.path_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        tk.Button(path_entry_frame, text="Add", command=self.add_path_from_entry, width=6).pack(side=tk.LEFT, padx=2)
+
+        # --- File list ---
+        list_frame = tk.Frame(root)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        tk.Label(list_frame, text="Files added (select to remove):").pack(anchor=tk.W)
+
+        listbox_frame = tk.Frame(list_frame)
+        listbox_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.listbox = tk.Listbox(listbox_frame, height=6, selectmode=tk.EXTENDED)
+        self.listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        scrollbar = tk.Scrollbar(listbox_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.listbox.config(yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.listbox.yview)
+
+        # --- Markdown output ---
+        output_frame = tk.Frame(root)
+        output_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        tk.Label(output_frame, text="Generated Markdown (copy this):").pack(anchor=tk.W)
+
+        self.text_area = scrolledtext.ScrolledText(
+            output_frame, wrap=tk.WORD, font=("Courier New", 10)
+        )
+        self.text_area.pack(fill=tk.BOTH, expand=True)
+
+        # --- Status bar ---
+        self.status_var = tk.StringVar()
+        self.status_var.set("Ready")
+        status_bar = ttk.Label(root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # --- Set up drag-and-drop if available ---
         if DND_AVAILABLE:
-            self.file_listbox.drop_target_register(DND_FILES)
-            self.file_listbox.dnd_bind('<<Drop>>', self.on_drop)
             self.root.drop_target_register(DND_FILES)
             self.root.dnd_bind('<<Drop>>', self.on_drop)
+            self.listbox.drop_target_register(DND_FILES)
+            self.listbox.dnd_bind('<<Drop>>', self.on_drop)
+            self.status_var.set("Drag-and-drop enabled - drop files/folders anywhere")
+        else:
+            self.status_var.set("Ready (drag-and-drop not available - install tkinterdnd2)")
 
-        # Generated Markdown Frame
-        output_frame = ttk.Frame(root, padding=10)
-        output_frame.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(output_frame, text="Generated Markdown (copy this):").pack(anchor=tk.W)
-        
-        self.output_text = scrolledtext.ScrolledText(output_frame, wrap=tk.WORD, font=mono_font)
-        self.output_text.pack(fill=tk.BOTH, expand=True)
+        # If command-line arguments were given, add them
+        if len(sys.argv) > 1:
+            self.root.after(100, lambda: self.add_paths(sys.argv[1:]))
 
-        # Status Bar
-        self.status_label = ttk.Label(root, text="Total size: 0 bytes | 0 tokens", relief=tk.SUNKEN, anchor=tk.W, padding=5)
-        self.status_label.pack(fill=tk.X, side=tk.BOTTOM)
+        self.update_output()
+
+    # --- Drag-and-drop callback ---
+    def on_drop(self, event):
+        data = event.data
+        if not data:
+            return
+        paths = []
+        data = data.strip()
+        pattern = r'\{([^}]+)\}|(\S+)'
+        matches = re.findall(pattern, data)
+        for m in matches:
+            path = m[0] if m[0] else m[1]
+            if path:
+                paths.append(path)
+        if paths:
+            self.add_paths(paths)
+
+    def add_paths(self, paths):
+        """Add a list of file/directory paths (expand directories recursively), skipping dotfiles/dotfolders."""
+        new_files = []
+        for p in paths:
+            p = os.path.abspath(p)
+            basename = os.path.basename(p)
+            if basename.startswith('.'):
+                continue
+
+            if os.path.isfile(p):
+                if p not in self.file_paths:
+                    new_files.append(p)
+            elif os.path.isdir(p):
+                for dirpath, dirnames, filenames in os.walk(p):
+                    dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+                    for f in filenames:
+                        if f.startswith('.'):
+                            continue
+                        full = os.path.join(dirpath, f)
+                        if full not in self.file_paths:
+                            new_files.append(full)
+            else:
+                messagebox.showerror("Invalid path", f"Path not found: {p}")
+
+        if new_files:
+            self.file_paths.extend(new_files)
+            self.update_output()
+            self.update_listbox()
+        # No status message - update_output will refresh the size/token info
 
     def add_files(self):
-        paths = filedialog.askopenfilenames(title="Select Files")
-        for path in paths:
-            self.add_path_to_list(path)
+        new_paths = filedialog.askopenfilenames(
+            title="Select text files",
+            filetypes=[("All files", "*.*")]
+        )
+        if new_paths:
+            self.add_paths(new_paths)
 
     def add_folder(self):
-        folder = filedialog.askdirectory(title="Select Folder")
+        folder = filedialog.askdirectory(title="Select a folder to add recursively")
         if folder:
-            for root, dirs, files in os.walk(folder):
-                for file in files:
-                    self.add_path_to_list(os.path.join(root, file))
+            self.add_paths([folder])
 
-    def add_manual_path(self):
+    def add_path_from_entry(self):
         path = self.path_entry.get().strip()
         if path:
-            if os.path.isdir(path):
-                for root, dirs, files in os.walk(path):
-                    for file in files:
-                        self.add_path_to_list(os.path.join(root, file))
-            elif os.path.isfile(path):
-                self.add_path_to_list(path)
-            else:
-                messagebox.showerror("Error", f"Path does not exist: {path}")
+            self.add_paths([path])
             self.path_entry.delete(0, tk.END)
 
-    def add_path_to_list(self, path):
-        # Avoid duplicates
-        if path not in self.file_listbox.get(0, tk.END):
-            self.file_listbox.insert(tk.END, path)
-            self.refresh_preview()
-
     def remove_selected(self):
-        for index in reversed(self.file_listbox.curselection()):
-            self.file_listbox.delete(index)
-        self.refresh_preview()
+        selected = self.listbox.curselection()
+        if not selected:
+            messagebox.showwarning("No selection", "Please select files to remove.")
+            return
+        for idx in reversed(selected):
+            del self.file_paths[idx]
+        self.update_output()
+        self.update_listbox()
 
     def clear_all(self):
-        self.file_listbox.delete(0, tk.END)
-        self.refresh_preview()
+        if self.file_paths:
+            self.file_paths.clear()
+            self.update_output()
+            self.update_listbox()
 
-    def on_drop(self, event):
-        # TkDND wraps paths with spaces in braces, and separates multiple files with spaces
-        paths = self.root.tk.splitlist(event.data)
-        for path in paths:
-            if os.path.isdir(path):
-                for root, dirs, files in os.walk(path):
-                    for file in files:
-                        self.add_path_to_list(os.path.join(root, file))
+    def update_listbox(self):
+        self.listbox.delete(0, tk.END)
+        for p in self.file_paths:
+            self.listbox.insert(tk.END, p)
+
+    def compute_common_base(self):
+        if not self.file_paths:
+            return None
+        try:
+            return os.path.commonpath(self.file_paths)
+        except ValueError:
+            return None
+
+    def update_output(self):
+        """Rebuild Markdown, update text area, and refresh status bar."""
+        if not self.file_paths:
+            self.text_area.delete(1.0, tk.END)
+            self.status_var.set("No files added")
+            return
+
+        base = self.compute_common_base()
+        markdown_parts = []
+
+        for path in self.file_paths:
+            content = read_file_content(path)
+            if base is not None:
+                rel = os.path.relpath(path, base)
             else:
-                self.add_path_to_list(path)
+                rel = os.path.abspath(path)
+            rel = rel.replace(os.sep, '/')
+            _, ext = os.path.splitext(path)
+            lang = get_language(ext)
+            code_block = f"```{lang}:{rel}\n{content}\n```"
+            markdown_parts.append(code_block)
 
-    def refresh_preview(self):
-        files = self.file_listbox.get(0, tk.END)
-        markdown = ""
-        total_size = 0
+        full_markdown = "\n\n".join(markdown_parts)
 
-        for file_path in files:
+        self.text_area.delete(1.0, tk.END)
+        self.text_area.insert(tk.END, full_markdown)
+
+        # Update status bar with size and tokens
+        self.update_status(full_markdown)
+
+    def update_status(self, markdown_text):
+        """Compute size in KB and tokens and show in status bar."""
+        text_bytes = len(markdown_text.encode('utf-8'))
+        size_kb = text_bytes / 1024.0
+
+        # Build status string
+        status_parts = [f"Size: {size_kb:.2f} KB"]
+
+        if TIKTOKEN_AVAILABLE and TOKENIZER:
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                
-                total_size += len(content.encode('utf-8'))
-                ext = os.path.splitext(file_path)[1].lstrip('.').lower()
-                lang = LANG_MAP.get(ext, ext)
-                
-                # Use full path for clarity
-                markdown += f"```{lang}:{file_path}\n{content}\n```\n\n"
-            except Exception as e:
-                markdown += f"Error reading {file_path}: {e}\n\n"
+                token_count = len(TOKENIZER.encode(markdown_text))
+                status_parts.append(f"Tokens: {token_count:,}")
+            except Exception:
+                status_parts.append("Tokens: error")
+        else:
+            status_parts.append("Tokens: N/A (install tiktoken)")
 
-        self.output_text.delete(1.0, tk.END)
-        self.output_text.insert(tk.END, markdown)
-
-        # Token Count
-        token_count = 0
-        if TOKENIZER_AVAILABLE and markdown:
-            try:
-                enc = tiktoken.get_encoding("cl100k_base")
-                token_count = len(enc.encode(markdown))
-            except:
-                token_count = 0
-
-        self.status_label.config(text=f"Total size: {total_size:,} bytes | {token_count:,} tokens")
+        self.status_var.set("  |  ".join(status_parts))
 
     def copy_to_clipboard(self):
-        self.root.clipboard_clear()
-        self.root.clipboard_append(self.output_text.get(1.0, tk.END))
-        messagebox.showinfo("Success", "Copied Markdown to clipboard!")
+        content = self.text_area.get(1.0, tk.END).strip()
+        if content:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            messagebox.showinfo("Copied", "Markdown copied to clipboard.")
+        else:
+            messagebox.showwarning("Nothing to copy", "No files added or content empty.")
 
-    def save_as_md(self):
-        file_path = filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown Files", "*.md")])
+    def save_to_file(self):
+        content = self.text_area.get(1.0, tk.END).strip()
+        if not content:
+            messagebox.showwarning("Nothing to save", "No files added or content empty.")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".md",
+            filetypes=[("Markdown files", "*.md"), ("All files", "*.*")]
+        )
         if file_path:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(self.output_text.get(1.0, tk.END))
-            messagebox.showinfo("Success", f"Saved to {file_path}")
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                messagebox.showinfo("Saved", f"Markdown saved to {file_path}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not save file: {e}")
 
-if __name__ == "__main__":
-    # Conditional root initialization for optional DND
+def main():
     if DND_AVAILABLE:
         root = TkinterDnD.Tk()
     else:
         root = tk.Tk()
-        
-    app = MarkdownAggregatorApp(root)
+    app = FileAggregatorApp(root)
     root.mainloop()
+
+if __name__ == "__main__":
+    main()
