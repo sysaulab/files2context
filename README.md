@@ -27,7 +27,7 @@ An ugly GUI tool that compiles text files into a single Markdown-formatted conte
 Clone the repository and run the script directly (requires Python 3.6+).
 
 ```bash
-git clone https://github.com/yourusername/files2context.git
+git clone https://github.com/sysaulab/files2context.git
 cd files2context
 python files2context.py
 ```
